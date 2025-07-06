@@ -1,1223 +1,643 @@
-import styled from "styled-components";
-import { Icon, Typography, Avatar } from "@beamcloud/design-system";
+import React, { useState, useEffect, useRef } from "react";
 import {
-  faHeart,
-  faPlay,
-  faSpinner,
-  faRotateRight,
-  faUpRightFromSquare,
-  faMobile,
-  faTablet,
-  faDesktop,
-} from "@fortawesome/pro-regular-svg-icons";
-import { useState, useEffect, useRef, useCallback } from "react";
-import { useMessageBus } from "../../hooks/useMessageBus";
-import { BEAM_CONFIG } from "../../config/beam";
-import { MessageType, Sender } from "../../types/messages";
-import type { Message } from "../../types/messages";
+  Typography,
+  TextField,
+  Box,
+  Card,
+  CardContent,
+  Avatar,
+  IconButton,
+  Paper,
+  CircularProgress
+} from "../../components/ui";
+import {
+  RefreshIcon,
+  OpenInNewIcon,
+  MobileIcon,
+  TabletIcon,
+  DesktopIcon,
+  PlayIcon,
+  SendIcon
+} from "../../components/ui";
+import {
+  AutoFixHigh as EnhanceIcon,
+  Code as CodeIcon,
+  Error as ErrorIcon
+} from '@mui/icons-material';
 import { useLocation } from "react-router-dom";
+import { styled } from '@mui/material/styles';
+import { useWebSocket } from "../../hooks/useWebSocket";
+import { MessageType } from "../../types/messages";
+import Logo from "../../components/Logo";
 
-const DEVICE_SPECS = {
-  mobile: { width: 390, height: 844 },
-  tablet: { width: 768, height: 1024 },
-  desktop: { width: "100%", height: "100%" },
-};
+const IframeContainer = styled(Box)(() => ({
+  position: 'relative',
+  width: '100%',
+  height: '100%',
+  borderRadius: 12,
+  overflow: 'hidden',
+  boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+  border: '1px solid rgba(255, 255, 255, 0.1)',
+}));
 
-const Create = () => {
-  const [inputValue, setInputValue] = useState("");
-  const [sidebarWidth, setSidebarWidth] = useState(400);
-  const [isResizing, setIsResizing] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [iframeUrl, setIframeUrl] = useState("");
-  const [iframeError, setIframeError] = useState(false);
+const ChatContainer = styled(Paper)(() => ({
+  height: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  background: 'rgba(20, 20, 20, 0.8)',
+  backdropFilter: 'blur(20px)',
+  border: '1px solid rgba(255, 255, 255, 0.1)',
+}));
+
+const MessageBubble = styled(Box)<{ isUser: boolean }>(({ theme, isUser }) => ({
+  padding: theme.spacing(1.5, 2),
+  borderRadius: 16,
+  marginBottom: theme.spacing(1),
+  maxWidth: '80%',
+  alignSelf: isUser ? 'flex-end' : 'flex-start',
+  background: isUser
+    ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.9) 0%, rgba(220, 38, 38, 0.9) 100%)'
+    : 'rgba(40, 40, 40, 0.8)',
+  backdropFilter: 'blur(10px)',
+  border: isUser
+    ? '1px solid rgba(239, 68, 68, 0.3)'
+    : '1px solid rgba(255, 255, 255, 0.1)',
+  color: 'white',
+}));
+
+const DeviceButton = styled(IconButton)<{ active: boolean }>(({ theme, active }) => ({
+  background: active
+    ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.9) 0%, rgba(220, 38, 38, 0.9) 100%)'
+    : 'rgba(40, 40, 40, 0.6)',
+  backdropFilter: 'blur(10px)',
+  border: active
+    ? '1px solid rgba(239, 68, 68, 0.3)'
+    : '1px solid rgba(255, 255, 255, 0.1)',
+  color: active ? 'white' : theme.palette.text.secondary,
+  '&:hover': {
+    background: active
+      ? 'linear-gradient(135deg, rgba(239, 68, 68, 1) 0%, rgba(220, 38, 38, 1) 100%)'
+      : 'rgba(60, 60, 60, 0.8)',
+    transform: 'scale(1.05)',
+  },
+}));
+
+const CreateScreen: React.FC = () => {
+  const [selectedDevice, setSelectedDevice] = useState<"mobile" | "tablet" | "desktop">("desktop");
+  const [iframeUrl, setIframeUrl] = useState<string | null>(null);
   const [iframeReady, setIframeReady] = useState(false);
-  const [isUpdateInProgress, setIsUpdateInProgress] = useState(false);
-  const [initCompleted, setInitCompleted] = useState(false);
+  const [iframeError, setIframeError] = useState(false);
+  const [inputMessage, setInputMessage] = useState("");
+  const [isEnhancing, setIsEnhancing] = useState(false);
+
   const chatHistoryRef = useRef<HTMLDivElement>(null);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const hasConnectedRef = useRef(false);
-  const processedMessageIds = useRef<Set<string>>(new Set());
   const location = useLocation();
-  const initialPromptSent = useRef(false);
-  const [selectedDevice, setSelectedDevice] = useState<
-    "mobile" | "tablet" | "desktop"
-  >("desktop");
 
-  const refreshIframe = useCallback(() => {
-    if (iframeRef.current && iframeUrl && iframeUrl !== "/") {
-      setIframeReady(false);
-      setIframeError(false);
+  // WebSocket connection
+  const wsUrl = import.meta.env.VITE_BEAM_WS_URL || '';
+  const wsToken = import.meta.env.VITE_BEAM_TOKEN || '';
 
-      // First refresh
-      const currentSrc = iframeRef.current.src;
-      iframeRef.current.src = "";
+  console.log('Environment variables:', { wsUrl, wsToken: wsToken ? 'SET' : 'NOT SET' });
 
-      setTimeout(() => {
-        if (iframeRef.current) {
-          iframeRef.current.src = currentSrc;
+  const { isConnected, messages, sendMessage, error } = useWebSocket({
+    url: wsUrl,
+    token: wsToken,
+    onMessage: (message) => {
+      console.log('Received message:', message);
 
-          // Second refresh after a longer delay
-          setTimeout(() => {
-            if (iframeRef.current) {
-              iframeRef.current.src = "";
-
-              setTimeout(() => {
-                if (iframeRef.current) {
-                  iframeRef.current.src = currentSrc;
-                }
-              }, 200);
-            }
-          }, 500);
-        }
-      }, 300);
-    }
-  }, [iframeUrl]);
-
-  // Message handlers for different message types
-  const messageHandlers = {
-    [MessageType.INIT]: (message: Message) => {
-      const id = message.id;
-      if (id) {
-        if (processedMessageIds.current.has(id)) {
-          console.log("Skipping duplicate INIT message:", id);
-          return;
-        }
-        processedMessageIds.current.add(id);
-        console.log("Processing INIT message:", id);
-      }
-
-      if (message.data.url && message.data.sandbox_id) {
+      // Handle different message types
+      if (message.type === MessageType.UPDATE_FILE && message.data?.url) {
         setIframeUrl(message.data.url);
+        setIframeReady(true);
         setIframeError(false);
-      }
-
-      setMessages((prev) => {
-        if (id) {
-          const existingIndex = prev.findIndex((msg) => msg.id === id);
-          if (existingIndex !== -1) {
-            // Update in place
-            return prev.map((msg, idx) =>
-              idx === existingIndex
-                ? {
-                    ...msg,
-                    timestamp: message.timestamp || msg.timestamp,
-                    data: {
-                      ...msg.data,
-                      text: "Workspace loaded! You can now make edits here.",
-                      sender: Sender.ASSISTANT,
-                    },
-                  }
-                : msg
-            );
-          }
-        }
-        // Insert new
-        return [
-          ...prev,
-          {
-            ...message,
-            timestamp: message.timestamp || Date.now(),
-            data: {
-              ...message.data,
-              text: "Workspace loaded! You can now make edits here.",
-              sender: Sender.ASSISTANT,
-            },
-          },
-        ];
-      });
-      setInitCompleted(true);
-    },
-
-    [MessageType.ERROR]: (message: Message) => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          ...message,
-          timestamp: message.timestamp || Date.now(),
-          data: {
-            ...message.data,
-            sender: Sender.ASSISTANT,
-          },
-        },
-      ]);
-    },
-
-    [MessageType.AGENT_PARTIAL]: (message: Message) => {
-      const text = message.data.text;
-      const id = message.id;
-
-      if (!id) {
-        console.warn("AGENT_PARTIAL message missing id, ignoring:", message);
-        return;
-      }
-
-      if (text && text.trim()) {
-        setMessages((prev) => {
-          const existingIndex = prev.findIndex((msg) => msg.id === id);
-          if (existingIndex !== -1) {
-            return prev.map((msg, idx) =>
-              idx === existingIndex
-                ? {
-                    ...msg,
-                    timestamp: message.timestamp || msg.timestamp,
-                    data: {
-                      ...msg.data,
-                      text: text.replace(/\\/g, ""),
-                      sender: Sender.ASSISTANT,
-                      isStreaming: true,
-                    },
-                  }
-                : msg
-            );
-          }
-          // Insert new
-          return [
-            ...prev,
-            {
-              ...message,
-              timestamp: message.timestamp || Date.now(),
-              data: {
-                ...message.data,
-                text: text.replace(/\\/g, ""),
-                isStreaming: true,
-                sender: Sender.ASSISTANT,
-              },
-            },
-          ];
-        });
+      } else if (message.type === MessageType.ERROR) {
+        setIframeError(true);
+        console.error('Agent error:', message.data?.error);
       }
     },
-
-    [MessageType.AGENT_FINAL]: (message: Message) => {
-      const text = message.data.text;
-      const id = message.id;
-      if (!id) {
-        console.warn("AGENT_FINAL message missing id, ignoring:", message);
-        return;
-      }
-      if (text && text.trim()) {
-        setMessages((prev) => {
-          const existingIndex = prev.findIndex((msg) => msg.id === id);
-          if (existingIndex !== -1) {
-            return prev.map((msg, idx) =>
-              idx === existingIndex
-                ? {
-                    ...msg,
-                    timestamp: message.timestamp || msg.timestamp,
-                    data: {
-                      ...msg.data,
-                      text: text.replace(/\\/g, ""),
-                      isStreaming: false,
-                      sender: Sender.ASSISTANT,
-                    },
-                  }
-                : msg
-            );
-          }
-          // Insert new
-          return [
-            ...prev,
-            {
-              ...message,
-              timestamp: message.timestamp || Date.now(),
-              data: {
-                ...message.data,
-                text: text.replace(/\\/g, ""),
-                isStreaming: false,
-                sender: Sender.ASSISTANT,
-              },
-            },
-          ];
-        });
-      }
-    },
-
-    [MessageType.UPDATE_IN_PROGRESS]: (message: Message) => {
-      setIsUpdateInProgress(true);
-
-      const id = message.id;
-
-      setMessages((prev) => {
-        if (id) {
-          const existingIndex = prev.findIndex((msg) => msg.id === id);
-          if (existingIndex !== -1) {
-            return prev.map((msg, idx) =>
-              idx === existingIndex
-                ? {
-                    ...msg,
-                    timestamp: message.timestamp || msg.timestamp,
-                    data: {
-                      ...msg.data,
-                      text: "Ok - I'll make those changes!",
-                      sender: Sender.ASSISTANT,
-                    },
-                  }
-                : msg
-            );
-          }
-        }
-
-        return [
-          ...prev,
-          {
-            ...message,
-            timestamp: message.timestamp || Date.now(),
-            data: {
-              ...message.data,
-              text: "Ok - I'll make those changes!",
-              sender: Sender.ASSISTANT,
-            },
-          },
-        ];
-      });
-    },
-
-    [MessageType.UPDATE_FILE]: (message: Message) => {
-      const id = message.id;
-      if (!id) {
-        console.warn("UPDATE_FILE message missing id, ignoring:", message);
-        return;
-      }
-      setMessages((prev) => {
-        const existingIndex = prev.findIndex((msg) => msg.id === id);
-        if (existingIndex !== -1) {
-          return prev.map((msg, idx) =>
-            idx === existingIndex
-              ? {
-                  ...msg,
-                  timestamp: message.timestamp || msg.timestamp,
-                  data: {
-                    ...msg.data,
-                    text: message.data.text,
-                    sender: Sender.ASSISTANT,
-                    isStreaming: true,
-                  },
-                }
-              : msg
-          );
-        }
-        // Insert new
-        return [
-          ...prev,
-          {
-            ...message,
-            timestamp: message.timestamp || Date.now(),
-            data: {
-              ...message.data,
-              text: message.data.text,
-              sender: Sender.ASSISTANT,
-              isStreaming: true,
-            },
-          },
-        ];
-      });
-    },
-
-    [MessageType.UPDATE_COMPLETED]: (message: Message) => {
-      setIsUpdateInProgress(false);
-      const id = message.id;
-      setMessages((prev) => {
-        // Remove all UPDATE_FILE messages
-        const filtered = prev.filter(
-          (msg) => msg.type !== MessageType.UPDATE_FILE
-        );
-
-        if (id) {
-          const existingIndex = filtered.findIndex((msg) => msg.id === id);
-          if (existingIndex !== -1) {
-            return filtered.map((msg, idx) =>
-              idx === existingIndex
-                ? {
-                    ...msg,
-                    timestamp: message.timestamp || msg.timestamp || Date.now(),
-                    data: {
-                      ...msg.data,
-                      text: "Update completed!",
-                      sender: Sender.ASSISTANT,
-                    },
-                  }
-                : msg
-            );
-          }
-        }
-        // Insert new
-        return [
-          ...filtered,
-          {
-            ...message,
-            timestamp: message.timestamp || Date.now(),
-            data: {
-              ...message.data,
-              text: "Update completed!",
-              sender: Sender.ASSISTANT,
-            },
-          },
-        ];
-      });
-      refreshIframe();
-    },
-  };
-
-  const { isConnected, error, connect, send } = useMessageBus({
-    wsUrl: BEAM_CONFIG.WS_URL,
-    token: BEAM_CONFIG.TOKEN,
-    handlers: messageHandlers,
     onConnect: () => {
-      console.log("Connected to Beam Cloud");
+      console.log('Connected to MojoCode agent');
     },
     onDisconnect: () => {
-      hasConnectedRef.current = false;
+      console.log('Disconnected from MojoCode agent');
     },
-    onError: (errorMsg) => {
-      console.error("Connection error:", errorMsg);
-
-      let errorString = "Unknown connection error";
-      if (typeof errorMsg === "string") {
-        errorString = errorMsg;
-      } else if (errorMsg && typeof errorMsg === "object") {
-        const errorObj = errorMsg as any;
-        if (errorObj.message) {
-          errorString = String(errorObj.message);
-        }
-      }
-
-      console.error("Processed error:", errorString);
-    },
+    onError: (error) => {
+      console.error('WebSocket error:', error);
+    }
   });
 
-  // Auto-scroll to bottom when messages change
+  const handleSendMessage = () => {
+    if (inputMessage.trim() && isConnected) {
+      try {
+        sendMessage(MessageType.USER, {
+          text: inputMessage,
+          sender: 'USER'
+        });
+        setInputMessage("");
+      } catch (error) {
+        console.error('Failed to send message:', error);
+      }
+    }
+  };
+
+  const handleEnhancePrompt = async () => {
+    if (!inputMessage.trim() || isEnhancing) return;
+
+    setIsEnhancing(true);
+
+    try {
+      // Enhanced prompt using local enhancement for now
+      const enhanced = await enhancePromptLocally(inputMessage);
+      setInputMessage(enhanced);
+    } catch (error) {
+      console.error('Failed to enhance prompt:', error);
+    } finally {
+      setIsEnhancing(false);
+    }
+  };
+
+  // AI-powered prompt enhancement function
+  const enhancePromptLocally = async (prompt: string): Promise<string> => {
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${import.meta.env.VITE_OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4.1',
+          messages: [
+            {
+              role: 'system',
+              content: `You are a creative web development expert. Transform basic project ideas into detailed, specific prompts for building modern web applications.
+
+Focus on:
+🎨 CREATIVE DESIGN: Innovative UI patterns, stunning animations, glassmorphism, gradients, unique layouts
+🔥 TECH STACK: React, TypeScript, Vite, Tailwind CSS, Framer Motion animations, responsive design
+🗄️ BACKEND NEEDS: Consider if the app needs user authentication, database storage, real-time features, API integrations
+🌟 FEATURES: Detailed functionality, user experience, interactive elements, professional polish
+
+IMPORTANT: Return ONLY the enhanced prompt text. No explanations, no quotes, no additional commentary - just the enhanced prompt that can be directly used for development.`
+            },
+            {
+              role: 'user',
+              content: `Transform this basic idea into a creative, detailed web development prompt: "${prompt}"`
+            }
+          ],
+          max_tokens: 300,
+          temperature: 0.8,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`OpenAI API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const enhancedText = data.choices[0]?.message?.content;
+
+      if (enhancedText) {
+        return enhancedText.trim();
+      }
+
+      throw new Error('No enhanced text received');
+    } catch (error) {
+      console.error('Error enhancing prompt with OpenAI:', error);
+
+      // Fallback to local enhancement if API fails
+      const lowerPrompt = prompt.toLowerCase();
+      let enhanced = prompt;
+
+      if (!lowerPrompt.includes('responsive')) {
+        enhanced = `responsive ${enhanced}`;
+      }
+
+      if (!lowerPrompt.includes('modern')) {
+        enhanced = `modern ${enhanced}`;
+      }
+
+    // Add specific technical requirements
+    const technicalDetails = [];
+
+    // Modern creative templates
+    if (lowerPrompt.includes('landing') || lowerPrompt.includes('business')) {
+      technicalDetails.push("with hero section, testimonials, pricing tables, contact forms, and conversion-optimized CTAs");
+    }
+
+    if (lowerPrompt.includes('game') || lowerPrompt.includes('chess') || lowerPrompt.includes('pacman') || lowerPrompt.includes('interactive')) {
+      technicalDetails.push("with real-time gameplay, smooth animations, score tracking, responsive controls, and AI opponents");
+    }
+
+    if (lowerPrompt.includes('voice') || lowerPrompt.includes('ai agent') || lowerPrompt.includes('ten framework')) {
+      technicalDetails.push("with real-time voice processing, speech-to-text, text-to-speech, and WebRTC integration");
+    }
+
+    if (lowerPrompt.includes('image') || lowerPrompt.includes('gemini') || lowerPrompt.includes('editor') || lowerPrompt.includes('generation')) {
+      technicalDetails.push("with drag-and-drop upload, real-time editing tools, AI-powered generation, and Google Gemini API integration");
+    }
+
+    // Legacy templates
+    if (lowerPrompt.includes('dashboard') || lowerPrompt.includes('admin')) {
+      technicalDetails.push("with data visualization components, charts, and analytics features");
+    }
+
+    if (lowerPrompt.includes('ecommerce') || lowerPrompt.includes('store') || lowerPrompt.includes('shop')) {
+      technicalDetails.push("with product catalog, shopping cart, checkout process, and payment integration");
+    }
+
+    if (lowerPrompt.includes('blog') || lowerPrompt.includes('content')) {
+      technicalDetails.push("with content management system, article layouts, and search functionality");
+    }
+
+    if (lowerPrompt.includes('portfolio')) {
+      technicalDetails.push("with project showcases, image galleries, and contact forms");
+    }
+
+      // Combine everything
+      const finalPrompt = `${enhanced}${technicalDetails.length > 0 ? ' ' + technicalDetails.join(', ') : ''}. Include proper navigation, attractive color scheme matching the red/black theme, smooth transitions, and professional typography.`;
+
+      return finalPrompt;
+    }
+  };
+
   useEffect(() => {
     if (chatHistoryRef.current) {
       chatHistoryRef.current.scrollTop = chatHistoryRef.current.scrollHeight;
     }
   }, [messages]);
 
-  // Handle resizing
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isResizing) {
-        const newWidth = e.clientX;
-        setSidebarWidth(Math.max(300, Math.min(800, newWidth)));
+    const initialPrompt = location.state?.initialPrompt;
+    if (initialPrompt && isConnected) {
+      try {
+        sendMessage(MessageType.USER, {
+          text: initialPrompt,
+          sender: 'USER'
+        });
+      } catch (error) {
+        console.error('Failed to send initial prompt:', error);
       }
-    };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
-
-    if (isResizing) {
-      document.addEventListener("mousemove", handleMouseMove);
-      document.addEventListener("mouseup", handleMouseUp);
     }
-
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [isResizing]);
-
-  const handleSendMessage = () => {
-    if (inputValue.trim()) {
-      send(MessageType.USER, { text: inputValue });
-      setInputValue("");
-      setMessages((prev) => [
-        ...prev,
-        {
-          type: MessageType.USER,
-          timestamp: Date.now(),
-          data: {
-            text: inputValue,
-            sender: Sender.USER,
-          },
-        },
-      ]);
-    }
-  };
-
-  useEffect(() => {
-    if (iframeUrl && isConnected) {
-      setIframeError(false);
-    }
-  }, [iframeUrl, isConnected]);
-
-  const handleIframeLoad = () => {
-    console.log("Iframe loaded successfully:", iframeUrl);
-    setIframeError(false);
-    setIframeReady(true);
-  };
-
-  const handleIframeError = () => {
-    console.error("Iframe failed to load:", iframeUrl);
-    setIframeError(true);
-  };
-
-  // Simple auto-connect
-  useEffect(() => {
-    if (!isConnected && !hasConnectedRef.current) {
-      console.log("Connecting to Workspace");
-      hasConnectedRef.current = true;
-      connect();
-    }
-  }, [isConnected]);
-
-  // Clear processed message IDs when connection is lost
-  useEffect(() => {
-    if (!isConnected) {
-      processedMessageIds.current.clear();
-    }
-  }, [isConnected]);
-
-  useEffect(() => {
-    setIframeReady(false);
-  }, [iframeUrl]);
-
-  useEffect(() => {
-    if (
-      initCompleted &&
-      location.state &&
-      location.state.initialPrompt &&
-      !initialPromptSent.current
-    ) {
-      // Send as user message (so it appears in chat)
-      send(MessageType.USER, { text: location.state.initialPrompt });
-      setMessages((prev) => [
-        ...prev,
-        {
-          type: MessageType.USER,
-          timestamp: Date.now(),
-          data: {
-            text: location.state.initialPrompt,
-            sender: Sender.USER,
-          },
-        },
-      ]);
-      initialPromptSent.current = true;
-    }
-  }, [initCompleted, location.state, send, setMessages]);
+  }, [location.state, isConnected, sendMessage]);
 
   const LoadingState = () => (
-    <IframeErrorContainer>
-      <SpinningIcon icon={faSpinner} size={64} color="gray8" />
-      <AnimatedTypography
-        variant="textLg"
-        color="gray11"
-        style={{ marginTop: "24px" }}
-      >
+    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 3 }}>
+      <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <CircularProgress size={80} sx={{ color: 'rgba(239, 68, 68, 0.8)' }} />
+        <Box
+          component="img"
+          src="/mojo.jpg"
+          alt="MojoCode"
+          sx={{
+            position: 'absolute',
+            width: 48,
+            height: 48,
+            borderRadius: '50%',
+            objectFit: 'cover',
+            filter: 'drop-shadow(0 0 10px rgba(239, 68, 68, 0.5))'
+          }}
+        />
+      </Box>
+      <Typography variant="h6" color="text.secondary">
         Connecting to Workspace...
-      </AnimatedTypography>
-      <Typography
-        variant="textSm"
-        color="gray10"
-        style={{ marginTop: "12px", textAlign: "center" }}
-      >
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', maxWidth: 400 }}>
         Please wait while we setup your workspace and load the website.
       </Typography>
-    </IframeErrorContainer>
+    </Box>
   );
 
-  const UpdateInProgressState = () => (
-    <IframeErrorContainer>
-      <SpinningIcon icon={faSpinner} size={64} color="gray8" />
-      <AnimatedTypography
-        variant="textLg"
-        color="gray11"
-        style={{ marginTop: "24px" }}
-      >
-        Updating Workspace...
-      </AnimatedTypography>
-      <Typography
-        variant="textSm"
-        color="gray10"
-        style={{ marginTop: "12px", textAlign: "center" }}
-      >
-        Please wait while we apply your changes to the website.
+  const ErrorState = () => (
+    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 3 }}>
+      <ErrorIcon sx={{ fontSize: 64, color: 'error.main' }} />
+      <Typography variant="h6" color="text.secondary">
+        Generation Failed
       </Typography>
-    </IframeErrorContainer>
+      <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', maxWidth: 400 }}>
+        Unable to generate your application. Please try again or check your connection.
+      </Typography>
+    </Box>
   );
 
   return (
-    <PageContainer>
-      <Sidebar style={{ width: `${sidebarWidth}px` }}>
-        <BeamHeader>
-          <Avatar name="Beam" />
-        </BeamHeader>
+    <Box sx={{
+      height: '100vh',
+      display: 'flex',
+      flexDirection: 'column',
+      background: 'radial-gradient(ellipse at top, rgba(239, 68, 68, 0.1) 0%, rgba(0, 0, 0, 0.9) 50%, #000000 100%)',
+      position: 'relative',
+      '&::before': {
+        content: '""',
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'url("data:image/svg+xml,%3Csvg width="60" height="60" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg"%3E%3Cg fill="none" fill-rule="evenodd"%3E%3Cg fill="%23ef4444" fill-opacity="0.05"%3E%3Ccircle cx="30" cy="30" r="1"/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")',
+        pointerEvents: 'none',
+      }
+    }}>
+      {/* Subtle corner watermark */}
+      <Box
+        component="img"
+        src="/mojo.jpg"
+        alt=""
+        sx={{
+          position: 'fixed',
+          bottom: 16,
+          right: 16,
+          width: 32,
+          height: 32,
+          borderRadius: '50%',
+          opacity: 0.1,
+          zIndex: 0,
+          pointerEvents: 'none',
+          filter: 'grayscale(100%)',
+        }}
+      />
 
-        <ChatHistory ref={chatHistoryRef}>
-          {messages
-            .filter((msg) => msg.data.text && msg.data.text.trim())
-            .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
-            .map((msg, index) => (
-              <MessageContainer
-                key={msg.id || `msg-${index}-${msg.timestamp || Date.now()}`}
-                isUser={msg.data.sender === Sender.USER}
-              >
-                <MessageBubble isUser={msg.data.sender === Sender.USER}>
-                  <Typography
-                    variant="textSm"
-                    color={msg.data.sender === Sender.USER ? "white" : "gray12"}
-                    style={{ whiteSpace: "pre-wrap" }}
-                  >
-                    {msg.data.text}
-                  </Typography>
-                  {msg.data.isStreaming && (
-                    <TypingIndicator>
-                      <TypingDot />
-                      <TypingDot />
-                      <TypingDot />
-                    </TypingIndicator>
-                  )}
-                </MessageBubble>
-              </MessageContainer>
-            ))}
-        </ChatHistory>
+      {/* Header */}
+      <Paper sx={{
+        p: 2,
+        borderRadius: 0,
+        background: 'rgba(20, 20, 20, 0.9)',
+        backdropFilter: 'blur(20px)',
+        border: 'none',
+        borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+        position: 'relative',
+        zIndex: 2
+      }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Logo size="small" />
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <DeviceButton active={selectedDevice === "mobile"} onClick={() => setSelectedDevice("mobile")}>
+              <MobileIcon />
+            </DeviceButton>
+            <DeviceButton active={selectedDevice === "tablet"} onClick={() => setSelectedDevice("tablet")}>
+              <TabletIcon />
+            </DeviceButton>
+            <DeviceButton active={selectedDevice === "desktop"} onClick={() => setSelectedDevice("desktop")}>
+              <DesktopIcon />
+            </DeviceButton>
+          </Box>
+        </Box>
+      </Paper>
 
-        <ChatInputContainer>
-          <ChatInput
-            placeholder="Ask Beam..."
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-            disabled={!isConnected || !iframeReady}
-          />
-          <SendButton
-            onClick={handleSendMessage}
-            disabled={!isConnected || !iframeReady || !inputValue.trim()}
-          >
-            Send
-          </SendButton>
-        </ChatInputContainer>
-      </Sidebar>
-
-      <ResizeHandle onMouseDown={() => setIsResizing(true)} />
-
-      <MainContent hasIframe={!!iframeUrl}>
-        {isConnected ? (
-          <IframeContainer>
-            <UrlBarContainer>
-              <Icon
-                icon={faRotateRight}
-                size={16}
-                color="gray11"
-                style={{ cursor: iframeUrl ? "pointer" : "not-allowed" }}
-                onClick={iframeUrl ? refreshIframe : undefined}
-                title="Refresh"
-              />
-              <UrlInput value={iframeUrl || ""} readOnly />
-              <a
-                href={iframeUrl || undefined}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  pointerEvents: iframeUrl ? "auto" : "none",
-                }}
-                tabIndex={iframeUrl ? 0 : -1}
-              >
-                <Icon
-                  icon={faUpRightFromSquare}
-                  size={16}
-                  color="gray11"
-                  title="Open in new tab"
+      {/* Main Content */}
+      <Box sx={{ flex: 1, display: 'flex', gap: 2, p: 2, position: 'relative', zIndex: 1 }}>
+        {/* Preview Panel */}
+        <Box sx={{ flex: 1 }}>
+          <Card sx={{
+            height: '100%',
+            background: 'rgba(20, 20, 20, 0.6)',
+            backdropFilter: 'blur(20px)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+          }}>
+            <CardContent sx={{ p: 2, height: '100%' }}>
+              {/* URL Bar */}
+              <Box sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                mb: 2,
+                p: 1,
+                background: 'rgba(40, 40, 40, 0.6)',
+                backdropFilter: 'blur(10px)',
+                borderRadius: 1,
+                border: '1px solid rgba(255, 255, 255, 0.1)'
+              }}>
+                <IconButton
+                  size="small"
+                  disabled={!iframeUrl}
+                  sx={{
+                    color: 'rgba(255, 255, 255, 0.7)',
+                    '&:hover': {
+                      background: 'rgba(239, 68, 68, 0.2)',
+                      color: '#ef4444'
+                    }
+                  }}
+                >
+                  <RefreshIcon />
+                </IconButton>
+                <TextField
+                  size="small"
+                  fullWidth
+                  value={iframeUrl || ""}
+                  slotProps={{ input: { readOnly: true } }}
+                  sx={{
+                    '& .MuiOutlinedInput-root': {
+                      background: 'rgba(20, 20, 20, 0.8)',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      '& fieldset': { border: 'none' }
+                    }
+                  }}
                 />
-              </a>
-            </UrlBarContainer>
-            <IframeArea>
-              {iframeError ? (
-                <IframeErrorContainer>
-                  <Icon icon={faHeart} size={64} color="gray8" />
-                  <Typography
-                    variant="textLg"
-                    color="gray11"
-                    style={{ marginTop: "24px" }}
-                  >
-                    Failed to load website
-                  </Typography>
-                  <Typography
-                    variant="textSm"
-                    color="gray10"
-                    style={{ marginTop: "12px", textAlign: "center" }}
-                  >
-                    {iframeUrl} took too long to load or failed to respond.
-                  </Typography>
-                  <Typography
-                    variant="textSm"
-                    color="gray10"
-                    style={{ marginTop: "8px", textAlign: "center" }}
-                  >
-                    This could be due to network issues or the website being
-                    temporarily unavailable.
-                  </Typography>
-                </IframeErrorContainer>
-              ) : !iframeUrl ? (
-                <IframeOverlay>
+                <IconButton
+                  size="small"
+                  component="a"
+                  href={iframeUrl || undefined}
+                  target="_blank"
+                  sx={{
+                    color: 'rgba(255, 255, 255, 0.7)',
+                    '&:hover': {
+                      background: 'rgba(239, 68, 68, 0.2)',
+                      color: '#ef4444'
+                    }
+                  }}
+                >
+                  <OpenInNewIcon />
+                </IconButton>
+              </Box>
+
+              {/* Preview Area */}
+              <IframeContainer sx={{ height: 'calc(100% - 80px)' }}>
+                {!iframeUrl ? (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 3 }}>
+                    <CodeIcon sx={{
+                      fontSize: 64,
+                      color: 'rgba(239, 68, 68, 0.8)',
+                      filter: 'drop-shadow(0 0 20px rgba(239, 68, 68, 0.3))'
+                    }} />
+                    <Typography variant="h6" sx={{ color: 'white' }}>Ready to Build Cool Shit</Typography>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <PlayIcon sx={{ color: 'rgba(239, 68, 68, 0.7)' }} />
+                        <Typography variant="body2" color="text.secondary">Send a message to start coding</Typography>
+                      </Box>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <RefreshIcon sx={{ color: 'rgba(239, 68, 68, 0.7)' }} />
+                        <Typography variant="body2" color="text.secondary">Live preview updates</Typography>
+                      </Box>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <CodeIcon sx={{ color: 'rgba(239, 68, 68, 0.7)' }} />
+                        <Typography variant="body2" color="text.secondary">AI-powered development</Typography>
+                      </Box>
+                    </Box>
+                  </Box>
+                ) : iframeError ? (
+                  <ErrorState />
+                ) : !iframeReady ? (
                   <LoadingState />
-                </IframeOverlay>
-              ) : !iframeReady || isUpdateInProgress || !initCompleted ? (
-                <>
-                  <IframeResponsiveWrapper>
-                    <WebsiteIframe
-                      ref={iframeRef}
-                      src={iframeUrl}
-                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-                      allow="fullscreen"
-                      referrerPolicy="no-referrer"
-                      loading="lazy"
-                      isResizing={isResizing}
-                      onLoad={handleIframeLoad}
-                      onError={handleIframeError}
-                      style={{
-                        visibility:
-                          iframeReady && !isUpdateInProgress
-                            ? "visible"
-                            : "hidden",
-                        width:
-                          typeof DEVICE_SPECS[selectedDevice].width === "number"
-                            ? `${DEVICE_SPECS[selectedDevice].width}px`
-                            : DEVICE_SPECS[selectedDevice].width,
-                        height:
-                          typeof DEVICE_SPECS[selectedDevice].height ===
-                          "number"
-                            ? `${DEVICE_SPECS[selectedDevice].height}px`
-                            : DEVICE_SPECS[selectedDevice].height,
-                        margin:
-                          selectedDevice === "desktop" ? "0" : "24px auto",
-                        display: "block",
-                        borderRadius: selectedDevice === "desktop" ? 0 : 16,
-                        boxShadow:
-                          selectedDevice === "desktop"
-                            ? "none"
-                            : "0 2px 16px rgba(0,0,0,0.12)",
-                        background: "#fff",
-                        boxSizing: "border-box",
-                      }}
-                    />
-                  </IframeResponsiveWrapper>
-                  <IframeOverlay>
-                    {isUpdateInProgress || (!iframeReady && !initCompleted) ? (
-                      <UpdateInProgressState />
-                    ) : (
-                      <LoadingState />
-                    )}
-                  </IframeOverlay>
-                </>
-              ) : (
-                <IframeResponsiveWrapper>
-                  <WebsiteIframe
-                    ref={iframeRef}
+                ) : (
+                  <iframe
                     src={iframeUrl}
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-                    allow="fullscreen"
-                    referrerPolicy="no-referrer"
-                    loading="lazy"
-                    isResizing={isResizing}
-                    onLoad={handleIframeLoad}
-                    onError={handleIframeError}
-                    style={{
-                      visibility:
-                        iframeReady && !isUpdateInProgress
-                          ? "visible"
-                          : "hidden",
-                      width:
-                        typeof DEVICE_SPECS[selectedDevice].width === "number"
-                          ? `${DEVICE_SPECS[selectedDevice].width}px`
-                          : DEVICE_SPECS[selectedDevice].width,
-                      height:
-                        typeof DEVICE_SPECS[selectedDevice].height === "number"
-                          ? `${DEVICE_SPECS[selectedDevice].height}px`
-                          : DEVICE_SPECS[selectedDevice].height,
-                      margin: selectedDevice === "desktop" ? "0" : "24px auto",
-                      display: "block",
-                      borderRadius: selectedDevice === "desktop" ? 0 : 16,
-                      boxShadow:
-                        selectedDevice === "desktop"
-                          ? "none"
-                          : "0 2px 16px rgba(0,0,0,0.12)",
-                      background: "#fff",
-                      boxSizing: "border-box",
-                    }}
+                    style={{ width: '100%', height: '100%', border: 'none' }}
                   />
-                </IframeResponsiveWrapper>
+                )}
+              </IframeContainer>
+            </CardContent>
+          </Card>
+        </Box>
+
+        {/* Chat Panel */}
+        <Box sx={{ width: 400 }}>
+          <ChatContainer>
+            <Box sx={{ p: 2, borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Avatar
+                  src="/mojo.jpg"
+                  alt="MojoCode Assistant"
+                  sx={{
+                    background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.9) 0%, rgba(220, 38, 38, 0.9) 100%)',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    fontWeight: 700,
+                    '& img': {
+                      objectFit: 'cover'
+                    }
+                  }}
+                >
+                  M
+                </Avatar>
+                <Box>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 600, color: 'white' }}>
+                    MojoCode
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: isConnected ? "#10b981" : "rgba(255, 255, 255, 0.5)",
+                      fontWeight: 500
+                    }}
+                  >
+                    {isConnected ? "Connected" : "Connecting..."}
+                  </Typography>
+                </Box>
+              </Box>
+            </Box>
+
+            {/* Messages */}
+            <Box ref={chatHistoryRef} sx={{ flex: 1, p: 2, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {messages.map((msg, index) => (
+                <MessageBubble key={index} isUser={msg.data?.sender === 'USER'}>
+                  <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                    {msg.data?.text || msg.data?.error || 'Message'}
+                  </Typography>
+                </MessageBubble>
+              ))}
+              {messages.length === 0 && (
+                <Box sx={{ textAlign: 'center', py: 4 }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {isConnected ? 'Start a conversation with the AI assistant' : 'Connecting to MojoCode agent...'}
+                  </Typography>
+                </Box>
               )}
-            </IframeArea>
-            <BottomBar>
-              <ToggleGroup>
-                <ToggleButton
-                  active={true}
-                  disabled={
-                    !iframeUrl ||
-                    !iframeReady ||
-                    isUpdateInProgress ||
-                    !initCompleted
-                  }
-                >
-                  Preview
-                </ToggleButton>
-                <ToggleButton
-                  active={false}
-                  disabled={
-                    !iframeUrl ||
-                    !iframeReady ||
-                    isUpdateInProgress ||
-                    !initCompleted
-                  }
-                >
-                  Code
-                </ToggleButton>
-              </ToggleGroup>
-              <DeviceGroup>
-                <DeviceButton
-                  active={selectedDevice === "mobile"}
-                  disabled={
-                    !iframeUrl ||
-                    !iframeReady ||
-                    isUpdateInProgress ||
-                    !initCompleted
-                  }
-                  onClick={() => setSelectedDevice("mobile")}
-                >
-                  <Icon icon={faMobile} size={18} />
-                </DeviceButton>
-                <DeviceButton
-                  active={selectedDevice === "tablet"}
-                  disabled={
-                    !iframeUrl ||
-                    !iframeReady ||
-                    isUpdateInProgress ||
-                    !initCompleted
-                  }
-                  onClick={() => setSelectedDevice("tablet")}
-                >
-                  <Icon icon={faTablet} size={18} />
-                </DeviceButton>
-                <DeviceButton
-                  active={selectedDevice === "desktop"}
-                  disabled={
-                    !iframeUrl ||
-                    !iframeReady ||
-                    isUpdateInProgress ||
-                    !initCompleted
-                  }
-                  onClick={() => setSelectedDevice("desktop")}
-                >
-                  <Icon icon={faDesktop} size={18} />
-                </DeviceButton>
-              </DeviceGroup>
-              <DeployButton
-                disabled={
-                  !iframeUrl ||
-                  !iframeReady ||
-                  isUpdateInProgress ||
-                  !initCompleted
-                }
-              >
-                Deploy
-              </DeployButton>
-            </BottomBar>
-          </IframeContainer>
-        ) : (
-          <>
-            <Icon icon={faHeart} size={64} color="gray8" />
-            <Typography
-              variant="textLg"
-              color="gray11"
-              style={{ marginTop: "24px" }}
-            >
-              Connect to start building
-            </Typography>
+              {error && (
+                <Box sx={{ textAlign: 'center', py: 2 }}>
+                  <Typography variant="body2" color="error">
+                    Connection error: {error}
+                  </Typography>
+                </Box>
+              )}
+            </Box>
 
-            {error && (
-              <ErrorMessage>
-                <Typography variant="textSm" color="red">
-                  Error: {error}
-                </Typography>
-              </ErrorMessage>
-            )}
-
-            <Checklist>
-              <ChecklistItem>
-                <Icon icon={faPlay} color="gray10" />
-                <Typography variant="textSm" color="gray10">
-                  Connect to Workspace
-                </Typography>
-              </ChecklistItem>
-              <ChecklistItem>
-                <Icon icon={faPlay} color="gray10" />
-                <Typography variant="textSm" color="gray10">
-                  Chat with AI in the sidebar
-                </Typography>
-              </ChecklistItem>
-              <ChecklistItem>
-                <Icon icon={faPlay} color="gray10" />
-                <Typography variant="textSm" color="gray10">
-                  Select specific elements to modify
-                </Typography>
-              </ChecklistItem>
-            </Checklist>
-          </>
-        )}
-      </MainContent>
-    </PageContainer>
+            {/* Input */}
+            <Box sx={{ p: 2, borderTop: '1px solid rgba(255, 255, 255, 0.1)' }}>
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  placeholder="Type your message..."
+                  value={inputMessage}
+                  onChange={(e) => setInputMessage(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSendMessage();
+                    }
+                  }}
+                  sx={{
+                    '& .MuiOutlinedInput-root': {
+                      background: 'rgba(40, 40, 40, 0.6)',
+                      backdropFilter: 'blur(10px)',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      '& fieldset': { border: 'none' },
+                      '&:hover': {
+                        border: '1px solid rgba(239, 68, 68, 0.5)',
+                      },
+                      '&.Mui-focused': {
+                        border: '1px solid rgba(239, 68, 68, 0.8)',
+                        boxShadow: '0 0 20px rgba(239, 68, 68, 0.3)',
+                      },
+                    }
+                  }}
+                />
+                <IconButton
+                  onClick={handleEnhancePrompt}
+                  disabled={!inputMessage.trim() || isEnhancing}
+                  title="Enhance prompt with AI"
+                  sx={{
+                    background: 'rgba(147, 51, 234, 0.2)',
+                    backdropFilter: 'blur(10px)',
+                    border: '1px solid rgba(147, 51, 234, 0.3)',
+                    color: 'rgba(147, 51, 234, 0.9)',
+                    '&:hover': {
+                      background: 'rgba(147, 51, 234, 0.3)',
+                      transform: 'scale(1.05)',
+                      boxShadow: '0 0 15px rgba(147, 51, 234, 0.4)',
+                    },
+                    '&:disabled': {
+                      background: 'rgba(100, 100, 100, 0.3)',
+                      color: 'rgba(255, 255, 255, 0.3)',
+                    }
+                  }}
+                >
+                  <EnhanceIcon sx={{
+                    fontSize: 18,
+                    animation: isEnhancing ? 'spin 1s linear infinite' : 'none',
+                    '@keyframes spin': {
+                      '0%': { transform: 'rotate(0deg)' },
+                      '100%': { transform: 'rotate(360deg)' }
+                    }
+                  }} />
+                </IconButton>
+                <IconButton
+                  onClick={handleSendMessage}
+                  disabled={!inputMessage.trim() || !isConnected}
+                  sx={{
+                    background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.9) 0%, rgba(220, 38, 38, 0.9) 100%)',
+                    backdropFilter: 'blur(10px)',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    color: 'white',
+                    '&:hover': {
+                      background: 'linear-gradient(135deg, rgba(239, 68, 68, 1) 0%, rgba(220, 38, 38, 1) 100%)',
+                      transform: 'scale(1.05)',
+                    },
+                    '&:disabled': {
+                      background: 'rgba(100, 100, 100, 0.3)',
+                      color: 'rgba(255, 255, 255, 0.3)',
+                    }
+                  }}
+                >
+                  <SendIcon />
+                </IconButton>
+              </Box>
+            </Box>
+          </ChatContainer>
+        </Box>
+      </Box>
+    </Box>
   );
 };
 
-export default Create;
-
-const PageContainer = styled.div`
-  display: flex;
-  flex-direction: row;
-  width: 100%;
-  height: 100%;
-  background-color: ${({ theme }) => theme.colors.gray3};
-`;
-
-const Sidebar = styled.div`
-  background-color: ${({ theme }) => theme.colors.gray2};
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  color: white;
-  gap: 24px;
-`;
-
-const MainContent = styled.div<{ hasIframe: boolean }>`
-  flex-grow: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: ${({ hasIframe }) => (hasIframe ? "stretch" : "center")};
-  justify-content: ${({ hasIframe }) => (hasIframe ? "stretch" : "center")};
-  gap: ${({ hasIframe }) => (hasIframe ? "0" : "24px")};
-  background-color: ${({ theme }) => theme.colors.gray1};
-`;
-
-const Checklist = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  margin-top: 48px;
-`;
-
-const ChecklistItem = styled.div`
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 12px;
-`;
-
-const BeamHeader = styled.div`
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 12px;
-`;
-
-const ChatHistory = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  overflow-y: auto;
-  flex-grow: 1;
-`;
-
-const MessageContainer = styled.div<{ isUser: boolean }>`
-  display: flex;
-  flex-direction: row;
-  justify-content: ${({ isUser }) => (isUser ? "flex-end" : "flex-start")};
-`;
-
-const MessageBubble = styled.div<{ isUser: boolean }>`
-  background-color: ${({ isUser, theme }) =>
-    isUser ? theme.colors.blue9 : theme.colors.gray4};
-  padding: 12px;
-  border-radius: 8px;
-  max-width: 70%;
-`;
-
-const ChatInputContainer = styled.div`
-  margin-top: auto;
-  display: flex;
-  flex-direction: row;
-  gap: 8px;
-`;
-
-const ChatInput = styled.input`
-  flex-grow: 1;
-  background-color: ${({ theme }) => theme.colors.gray1};
-  border: 1px solid ${({ theme }) => theme.colors.gray6};
-  border-radius: 8px;
-  padding: 12px;
-  color: ${({ theme }) => theme.colors.gray12};
-
-  &::placeholder {
-    color: ${({ theme }) => theme.colors.gray9};
-  }
-`;
-
-const SendButton = styled.button`
-  background-color: ${({ theme }) => theme.colors.blue9};
-  color: white;
-  border: none;
-  border-radius: 6px;
-  padding: 8px 16px;
-  cursor: pointer;
-  font-size: 14px;
-
-  &:hover:not(:disabled) {
-    background-color: ${({ theme }) => theme.colors.blue10};
-  }
-
-  &:disabled {
-    background-color: ${({ theme }) => theme.colors.gray6};
-    cursor: not-allowed;
-  }
-`;
-
-const ErrorMessage = styled.div`
-  background-color: ${({ theme }) => theme.colors.red3};
-  border: 1px solid ${({ theme }) => theme.colors.red6};
-  border-radius: 6px;
-  padding: 12px;
-  margin-top: 16px;
-`;
-
-const TypingIndicator = styled.div`
-  display: flex;
-  gap: 4px;
-  margin-top: 8px;
-  justify-content: flex-start;
-`;
-
-const TypingDot = styled.div`
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background-color: ${({ theme }) => theme.colors.gray8};
-  animation: typing 1.4s infinite ease-in-out;
-
-  &:nth-child(1) {
-    animation-delay: -0.32s;
-  }
-
-  &:nth-child(2) {
-    animation-delay: -0.16s;
-  }
-
-  @keyframes typing {
-    0%,
-    80%,
-    100% {
-      transform: scale(0.8);
-      opacity: 0.5;
-    }
-    40% {
-      transform: scale(1);
-      opacity: 1;
-    }
-  }
-`;
-
-const ResizeHandle = styled.div`
-  width: 4px;
-  background-color: ${({ theme }) => theme.colors.gray6};
-  cursor: col-resize;
-  transition: background-color 0.2s ease;
-
-  &:hover {
-    background-color: ${({ theme }) => theme.colors.gray8};
-  }
-
-  &:active {
-    background-color: ${({ theme }) => theme.colors.blue9};
-  }
-`;
-
-const IframeContainer = styled.div`
-  position: relative;
-  width: 100%;
-  height: 100%;
-  overflow: auto;
-`;
-
-const IframeArea = styled.div`
-  position: relative;
-  width: 100%;
-  height: calc(100% - 56px - 40px); /* subtract bottom bar and url bar height */
-  min-height: 0;
-  padding: 0;
-  margin: 0;
-  box-sizing: border-box;
-`;
-
-const IframeResponsiveWrapper = styled.div`
-  width: 100%;
-  height: 100%;
-  overflow: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  & > iframe {
-    max-width: 100%;
-    max-height: 100%;
-  }
-`;
-
-const WebsiteIframe = styled.iframe<{ isResizing: boolean }>`
-  width: 100%;
-  height: 100%;
-  border: none;
-  pointer-events: ${({ isResizing }) => (isResizing ? "none" : "auto")};
-  display: block;
-  box-sizing: border-box;
-`;
-
-const IframeErrorContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 24px;
-`;
-
-const AnimatedTypography = styled(Typography)`
-  animation: pulse 1.5s infinite;
-  @keyframes pulse {
-    0% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.5;
-    }
-    100% {
-      opacity: 1;
-    }
-  }
-`;
-
-const IframeOverlay = styled.div`
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background: ${({ theme }) => theme.colors.gray1};
-  z-index: 2;
-`;
-
-const SpinningIcon = styled(Icon)`
-  animation: spin 1s linear infinite;
-
-  @keyframes spin {
-    from {
-      transform: rotate(0deg);
-    }
-    to {
-      transform: rotate(360deg);
-    }
-  }
-`;
-
-const UrlBarContainer = styled.div`
-  display: flex;
-  align-items: center;
-  background: ${({ theme }) => theme.colors.gray2};
-  border-bottom: 1px solid ${({ theme }) => theme.colors.gray5};
-  padding: 6px 12px;
-  gap: 8px;
-`;
-
-const UrlInput = styled.input`
-  flex: 1;
-  background: ${({ theme }) => theme.colors.gray3};
-  border: none;
-  color: ${({ theme }) => theme.colors.gray11};
-  border-radius: 4px;
-  padding: 4px 8px;
-  font-size: 14px;
-  outline: none;
-`;
-
-const BottomBar = styled.div`
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: ${({ theme }) => theme.colors.gray2};
-  border-top: 1px solid ${({ theme }) => theme.colors.gray5};
-  padding: 0 24px;
-  height: 56px;
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 3;
-`;
-
-const ToggleGroup = styled.div`
-  display: flex;
-  gap: 8px;
-`;
-
-const ToggleButton = styled.button<{ active?: boolean }>`
-  background: ${({ active, theme }) =>
-    active ? theme.colors.gray4 : theme.colors.gray2};
-  color: ${({ active, theme, disabled }) =>
-    disabled
-      ? theme.colors.gray7
-      : active
-      ? theme.colors.gray12
-      : theme.colors.gray10};
-  border: 1px solid ${({ theme }) => theme.colors.gray6};
-  border-radius: 6px;
-  padding: 6px 18px;
-  font-size: 15px;
-  font-weight: 500;
-  cursor: ${({ disabled }) => (disabled ? "not-allowed" : "pointer")};
-  transition: background 0.15s, color 0.15s;
-  &:hover:not(:disabled) {
-    background: ${({ theme }) => theme.colors.gray5};
-  }
-`;
-
-const DeviceGroup = styled.div`
-  display: flex;
-  gap: 8px;
-`;
-
-const DeviceButton = styled.button<{ active?: boolean }>`
-  background: ${({ active, theme }) =>
-    active ? theme.colors.blue9 : theme.colors.gray2};
-  color: ${({ active, theme, disabled }) =>
-    disabled ? theme.colors.gray7 : active ? "white" : theme.colors.gray10};
-  border: 1px solid ${({ theme }) => theme.colors.gray6};
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: ${({ disabled }) => (disabled ? "not-allowed" : "pointer")};
-  transition: background 0.15s, color 0.15s;
-  &:hover:not(:disabled) {
-    background: ${({ theme }) => theme.colors.blue8};
-    color: white;
-  }
-`;
-
-const DeployButton = styled.button`
-  background: ${({ theme }) => theme.colors.violet9};
-  color: white;
-  border: none;
-  border-radius: 6px;
-  padding: 8px 28px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: ${({ disabled }) => (disabled ? "not-allowed" : "pointer")};
-  transition: background 0.15s;
-  opacity: ${({ disabled }) => (disabled ? 0.6 : 1)};
-  &:hover:not(:disabled) {
-    background: ${({ theme }) => theme.colors.violet10};
-  }
-`;
+export default CreateScreen;

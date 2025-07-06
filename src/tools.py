@@ -5,7 +5,7 @@ from beam import Image, Sandbox
 from beam.integrations import MCPServer
 from fastmcp import FastMCP
 
-mcp = FastMCP(name="lovable-clone-mcp")
+mcp = FastMCP(name="mojocode-mcp")
 image = (
     Image()
     .from_registry("node:20")
@@ -28,7 +28,7 @@ def create_app_environment() -> dict:
     print("Creating app environment...")
 
     sandbox = Sandbox(
-        name="lovable-clone",
+        name="mojocode-sandbox",
         cpu=1,
         memory=1024,
         image=image,
@@ -111,4 +111,11 @@ def edit_code(sandbox_id: str, code_map: dict) -> dict:
     return {"sandbox_id": sandbox.sandbox_id()}
 
 
-s = MCPServer(mcp, cpu=1, memory=1024, keep_warm_seconds=600, concurrent_requests=1000)
+s = MCPServer(
+    mcp,
+    name="mojocode-tools",
+    cpu=1,
+    memory=1024,
+    keep_warm_seconds=600,
+    concurrent_requests=1000
+)

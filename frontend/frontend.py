@@ -36,6 +36,7 @@ image = Image(
 
 
 @asgi(
+    name="mojocode-frontend",
     image=image,
     authorized=False,
     concurrent_requests=1000,

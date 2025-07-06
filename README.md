@@ -1,8 +1,8 @@
-# Lovable Clone - AI-Powered Web App Builder
+# MojoCode - AI-Powered Web App Builder
 
-A real-time AI-powered web application builder inspired by [lovable.dev](https://lovable.dev). This project demonstrates how to build a simple agent using sandboxed environments, MCP servers, and [BAML](https://github.com/BoundaryML/baml). It's hosted on [beam.cloud](https://beam.cloud).
+A real-time AI-powered web application builder that helps you "Build. Cool. Shit!" This project demonstrates how to build a simple agent using sandboxed environments, MCP servers, and [BAML](https://github.com/BoundaryML/baml). It's hosted on [beam.cloud](https://beam.cloud).
 
-![Lovable Clone Demo](assets/lovable-demo.gif)
+![MojoCode Demo](assets/mojocode-demo.gif)
 
 > To learn about the architecture in detail, read the full post [on our blog](https://www.beam.cloud/blog/agentic-apps).
 
@@ -29,8 +29,8 @@ The application consists of four main components:
 1. **Clone the repository**
 
    ```bash
-   git clone https://github.com/beam-cloud/lovable-clone
-   cd lovable-clone
+   git clone https://github.com/beam-cloud/mojocode
+   cd mojocode
    ```
 
 2. **Install Python dependencies**
@@ -50,8 +50,8 @@ The application consists of four main components:
 
 4. **Set up secrets**
    ```bash
-   beam secret create OPENAI_API_KEY 'your-openai-api-key'
-   beam secret create LOVABLE_MCP_URL 'your-mcp-server-url'
+   beam secret create OPENAI_API_KEY 'your-openai-api-key-here'
+   beam secret create MOJOCODE_MCP_URL 'your-mcp-server-url'
    ```
 
 ## 🎯 Usage

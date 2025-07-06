@@ -1,6 +1,7 @@
-import 'styled-components';
-import { Theme as DesignSystemTheme } from '@beamcloud/design-system';
+import '@mui/material/styles';
 
-declare module 'styled-components' {
-  export interface DefaultTheme extends DesignSystemTheme {}
-} 
+declare module '@mui/material/styles' {
+  interface Theme {
+    // Add any custom theme properties here if needed
+  }
+}
